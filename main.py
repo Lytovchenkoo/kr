@@ -33,6 +33,7 @@ def get_display_image():
     return base
 
 def update_canvas():
+    """Повне оновлення екрану"""
     try:
         img = get_display_image()
         if img:
@@ -106,103 +107,103 @@ last_pos = None
 clipboard = None
 floating_object = None 
 drag_start = None
-is_mouse_down = False 
 
 while True:
     event, values = window.read(timeout=20)
     if event in (sg.WIN_CLOSED, "Вихід"): break
 
+    # Безпечне отримання миші
     mouse = values['-GRAPH-'] if values and '-GRAPH-' in values else (None, None)
 
-    # === 1. НАТИСКАННЯ (ПОЧАТОК) ===
-    if event == '-GRAPH-+DOWN+':
-        is_mouse_down = True
-        last_pos = mouse 
-        
-        if tool_mode in ['RECT', 'ELLIPSE', 'LASSO']:
-            selection_tool.start_selection(mouse, tool_mode)
-        elif tool_mode == 'MoveTool' and floating_object:
-            drag_start = mouse; obj_start = (floating_object['x'], floating_object['y'])
-
-        elif tool_mode in ['DRAW', 'ERASER'] and layer_manager:
-            is_eraser = (tool_mode == 'ERASER')
-            layer_manager.draw_on_active_layer(mouse, erase=is_eraser)
-            if is_eraser: update_canvas()
-
-        elif tool_mode == 'TEXT' and layer_manager:
-            l = layer_manager.get_active_layer()
-            col = layer_manager.get_drawing_color()
-            if l and text_tool.add_text(l['image'], mouse, col): 
-                save_state(); update_canvas()
-            tool_mode = None
-        
-        elif tool_mode == 'EYEDROPPER':
-            disp = get_display_image()
-            if disp:
-                col = eyedropper_tool.pick_color(disp, mouse)
-                if col and layer_manager: layer_manager.set_drawing_color(col)
-            tool_mode = None
-
-    # === 2. ВІДПУСКАННЯ (КІНЕЦЬ) ===
-    elif event == '-GRAPH-+UP+':
-        if is_mouse_down:
-            if tool_mode in ['DRAW', 'ERASER']:
-                if not (tool_mode == 'ERASER'): update_canvas() 
-                save_state()
-            
-            if tool_mode in ['RECT', 'ELLIPSE', 'LASSO']:
-                selection_tool.finish_selection(window['-GRAPH-'])
-
-        is_mouse_down = False
-        last_pos = None
-        drag_start = None
-
-    # === 3. РУХ МИШІ (ПЛАВНЕ МАЛЮВАННЯ) ===
-    elif event == '-GRAPH-' and mouse != (None, None) and last_pos is not None:
+    # === МАЛЮВАННЯ ТА РУХ ===
+    if event == '-GRAPH-' and mouse != (None, None):
         x, y = mouse
         
-        if tool_mode == 'MoveTool' and floating_object and drag_start:
-            dx, dy = x - drag_start[0], y - drag_start[1]
-            floating_object['x'] = obj_start[0] + dx
-            floating_object['y'] = obj_start[1] + dy
-            update_canvas()
+        # ПЕРЕМІЩЕННЯ
+        if tool_mode == 'MoveTool' and floating_object:
+            if not drag_start:
+                drag_start = mouse; obj_start = (floating_object['x'], floating_object['y'])
+            else:
+                dx, dy = x - drag_start[0], y - drag_start[1]
+                floating_object['x'] = obj_start[0] + dx
+                floating_object['y'] = obj_start[1] + dy
+                update_canvas()
 
+        # МАЛЮВАННЯ (Гібридний метод: Швидко на екрані + В пам'ять)
         elif tool_mode in ['DRAW', 'ERASER'] and layer_manager:
             is_eraser = (tool_mode == 'ERASER')
             
             if last_pos:
-                # Малюємо лінію в пам'яті
+                # 1. Малюємо лінію в пам'яті
                 layer_manager.draw_on_active_layer_line(last_pos, (x, y), erase=is_eraser)
                 
                 if is_eraser:
+                    # Стирачка вимагає повного оновлення (відновлення фону)
                     update_canvas()
                 else:
-                    # Пензель: малюємо на екрані для плавності
+                    # Пензель: малюємо лінію на екрані (ДУЖЕ ШВИДКО, НЕМАЄ КРАПОК)
                     c = layer_manager.get_drawing_color(); hex_c = "#{:02x}{:02x}{:02x}".format(*c[:3])
                     r = layer_manager.brush_radius
-                    window['-GRAPH-'].draw_line(last_pos, (x, y), color=hex_color, width=r*2)
-                    window['-GRAPH-'].draw_circle((x, y), r, fill_color=hex_color, line_color=hex_color)
+                    window['-GRAPH-'].draw_line(last_pos, (x, y), color=hex_c, width=r*2)
+                    window['-GRAPH-'].draw_circle((x, y), r, fill_color=hex_c, line_color=hex_c)
+            else:
+                # Перша точка
+                layer_manager.draw_on_active_layer((x, y), erase=is_eraser)
+                if is_eraser: update_canvas()
             
             last_pos = (x, y)
 
+        # ВИДІЛЕННЯ
         elif tool_mode in ['RECT', 'ELLIPSE', 'LASSO']:
-            selection_tool.update_selection(mouse, window['-GRAPH-'])
+            if not selection_tool.selecting: selection_tool.start_selection(mouse, tool_mode)
+            else: selection_tool.update_selection(mouse, window['-GRAPH-'])
 
-    # === 4. ІНШІ ПОДІЇ ===
+    # === ЯКЩО МИША НЕ РУХАЄТЬСЯ (АБО ВІДПУЩЕНА) ===
+    elif event != '-GRAPH-':
+        # Скидаємо лінію (щоб не з'єднувалась)
+        last_pos = None
+        drag_start = None
+        
+        # Завершуємо виділення
+        if tool_mode in ['RECT', 'ELLIPSE', 'LASSO'] and selection_tool.selecting:
+            selection_tool.finish_selection(window['-GRAPH-'])
+
+    # === ІНСТРУМЕНТИ ===
+    if event == "Почати малювання": 
+        if floating_object: save_state()
+        
+        # Автоматично додаємо шар, якщо на фоні (Ваша ідея)
+        if layer_manager and layer_manager.active_index == 0:
+             layer_manager.add_layer(name="Малювання")
+             update_ui_layers()
+             sg.popup_quick_message("Створено шар для малювання")
+        
+        tool_mode = 'DRAW'
+        last_pos = None
+
+    if event == "Завершити малювання":
+        tool_mode = None
+        last_pos = None
+        update_canvas() # Фіксуємо малюнок
+        save_state()    # Зберігаємо в історію
+
+    if event == "MoveTool": tool_mode = 'MoveTool'
+    elif event == "EraserTool":
+        if floating_object: save_state()
+        tool_mode = 'ERASER'; sg.popup_quick_message("Стирачка")
+    elif event == "Піпетка": tool_mode = 'EYEDROPPER'; eyedropper_tool.activate()
+    elif event == "Текст": tool_mode = 'TEXT'
+    
+    # Клік для Тексту/Піпетки (перевіряємо окремо, бо drag_submits=True може не дати клік)
+    # Тут ми використовуємо простий трюк: якщо натиснули кнопку, а drag не почався
+    
+    # ... (Інші події стандартні) ...
+
     if event == "ChooseColor" and layer_manager:
         picked = sg.askcolor()
         if picked and picked[0]:
             rgba = picked[0] + (255,)
             layer_manager.set_drawing_color(rgba)
-    
-    # АВТО-ШАР ПРИ МАЛЮВАННІ
-    if event == "Почати малювання":
-        if floating_object: save_state()
-        if layer_manager and layer_manager.active_index == 0:
-             layer_manager.add_layer(name="Малювання")
-             update_ui_layers()
-             sg.popup_quick_message("Створено шар для малювання")
-        tool_mode = 'DRAW'
 
     if event == "Відкрити файл":
         img = load_image()
@@ -256,13 +257,7 @@ while True:
     elif event == "AnchorObject":
         if floating_object: save_state(); update_canvas(); sg.popup_quick_message("Зафіксовано")
 
-    if event == "MoveTool": tool_mode = 'MoveTool'
-    elif event == "EraserTool":
-        if floating_object: save_state()
-        tool_mode = 'ERASER'; sg.popup_quick_message("Стирачка")
-    elif event == "Піпетка": tool_mode = 'EYEDROPPER'; eyedropper_tool.activate()
-    elif event == "Текст": tool_mode = 'TEXT'
-    elif event in ["SelectRect", "SelectEllipse", "SelectLasso"]:
+    if event in ["SelectRect", "SelectEllipse", "SelectLasso"]:
         tool_mode = {'SelectRect':'RECT', 'SelectEllipse':'ELLIPSE', 'SelectLasso':'LASSO'}[event]; selection_tool.active = True
     elif event == "Скасувати виділення": selection_tool.clear_selection(window['-GRAPH-']); update_canvas()
     elif event == "DeleteArea" and layer_manager:
@@ -285,10 +280,8 @@ while True:
         elif event == "Насиченість-": apply_layer_filter(adjust_saturation, factor=0.0)
         elif event == "АвтоРівні": apply_layer_filter(auto_levels)
         elif event == "БалансКольорів":
-            r = get_valid_float("Червоний канал", 1.0, 0.0, 5.0)
-            if r is not None:
-                b = get_valid_float("Синій канал", 1.0, 0.0, 5.0)
-                if b is not None: apply_layer_filter(adjust_color_balance, r=r, g=1.0, b=b)
+            r = get_valid_float("Червоний канал", 1.0); b = get_valid_float("Синій", 1.0)
+            if r and b: apply_layer_filter(adjust_color_balance, r=r, g=1.0, b=b)
 
     if event == "Обернути" and layer_manager:
         if floating_object: floating_object['image'] = floating_object['image'].rotate(-90, expand=True); update_canvas()

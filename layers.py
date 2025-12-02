@@ -3,8 +3,9 @@ from PIL import Image, ImageDraw, ImageOps
 
 class LayerManager:
     def __init__(self, base_image: Image.Image):
+        # Конвертуємо в RGBA
         base = base_image.convert("RGBA")
-        # Зберігаємо оригінал для відновлення
+        # Зберігаємо оригінал для відновлення стирачкою
         self.original_background = base.copy()
         
         self.layers = [
@@ -81,34 +82,36 @@ class LayerManager:
         
         if erase:
             if self.active_index == 0:
-                # ВІДНОВЛЕННЯ З ОРИГІНАЛУ (для фону)
+                # === СТИРАЧКА НА ФОНІ: ВІДНОВЛЮЄМО З ОРИГІНАЛУ ===
                 x1, y1 = start; x2, y2 = end
                 left = int(max(0, min(x1, x2) - r*2)); top = int(max(0, min(y1, y2) - r*2))
                 right = int(min(layer['image'].width, max(x1, x2) + r*2)); bottom = int(min(layer['image'].height, max(y1, y2) + r*2))
                 if right <= left or bottom <= top: return
-                
+
                 w_box, h_box = right - left, bottom - top
                 mask = Image.new('L', (w_box, h_box), 0)
                 draw = ImageDraw.Draw(mask)
+                
                 draw.line([(x1-left, y1-top), (x2-left, y2-top)], fill=255, width=width)
                 draw.ellipse([(x1-left-r, y1-top-r), (x1-left+r, y1-top+r)], fill=255)
                 draw.ellipse([(x2-left-r, y2-top-r), (x2-left+r, y2-top+r)], fill=255)
-                
-                orig = self.original_background.crop((left, top, right, bottom))
-                curr = layer['image'].crop((left, top, right, bottom))
-                restored = Image.composite(orig, curr, mask)
+
+                orig_crop = self.original_background.crop((left, top, right, bottom))
+                curr_crop = layer['image'].crop((left, top, right, bottom))
+                restored = Image.composite(orig_crop, curr_crop, mask)
                 layer['image'].paste(restored, (left, top))
             
             else:
-                # НА ШАРАХ: ПРОЗОРІСТЬ
-                r_ch, g_ch, b_ch, alpha = layer['image'].split()
-                draw = ImageDraw.Draw(alpha)
-                draw.line([start, end], fill=0, width=width)
-                draw.ellipse([start[0]-r, start[1]-r, start[0]+r, start[1]+r], fill=0)
-                draw.ellipse([end[0]-r, end[1]-r, end[0]+r, end[1]+r], fill=0)
-                layer['image'].putalpha(alpha)
+                # === СТИРАЧКА НА ШАРАХ: ПРОЗОРІСТЬ ===
+                if layer['image'].mode == 'RGBA':
+                    r_ch, g_ch, b_ch, alpha = layer['image'].split()
+                    draw = ImageDraw.Draw(alpha)
+                    draw.line([start, end], fill=0, width=width)
+                    draw.ellipse([start[0]-r, start[1]-r, start[0]+r, start[1]+r], fill=0)
+                    draw.ellipse([end[0]-r, end[1]-r, end[0]+r, end[1]+r], fill=0)
+                    layer['image'].putalpha(alpha)
         else:
-            # МАЛЮВАННЯ
+            # === МАЛЮВАННЯ ===
             draw = ImageDraw.Draw(layer['image'])
             draw.line([start, end], fill=self.current_color, width=width)
             draw.ellipse([start[0]-r, start[1]-r, start[0]+r, start[1]+r], fill=self.current_color)
@@ -116,7 +119,9 @@ class LayerManager:
 
     def get_composite(self):
         w, h = self.layers[0]['image'].size
+        # Біла підкладка
         composite = Image.new("RGBA", (w, h), (255, 255, 255, 255))
         for layer in self.layers:
-            if layer['visible']: composite = Image.alpha_composite(composite, layer['image'])
+            if layer['visible']:
+                composite = Image.alpha_composite(composite, layer['image'])
         return composite

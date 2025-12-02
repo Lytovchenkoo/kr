@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 from PIL import Image, ImageDraw
-import PySimpleGUI as sg
 
 class SelectionTool:
     def __init__(self):
@@ -8,17 +7,18 @@ class SelectionTool:
         self.points = []
         self.selecting = False
         self.figure_id = None
-        self.active = False
+        self.active = False # Чи є активне виділення?
 
     def start_selection(self, point, mode='RECT'):
         self.mode = mode
         self.points = [point]
         self.selecting = True
-        self.active = False
+        self.active = False # Поки виділяємо - воно ще не активне
 
     def update_selection(self, point, graph):
         if not self.selecting: return
         
+        # Видаляємо стару фігуру
         if self.figure_id:
             graph.delete_figure(self.figure_id)
 
@@ -28,7 +28,7 @@ class SelectionTool:
                 self.figure_id = graph.draw_polygon(self.points, line_color='red', line_width=2, fill_color=None)
         else:
             start = self.points[0]
-            self.points = [start, point]
+            self.points = [start, point] # Оновлюємо кінець
             
             if self.mode == 'RECT':
                 self.figure_id = graph.draw_rectangle(start, point, line_color='red', line_width=2)
@@ -37,7 +37,9 @@ class SelectionTool:
 
     def finish_selection(self, graph):
         self.selecting = False
-        self.active = True
+        # Якщо виділення має хоча б якусь площу - воно стає активним
+        if len(self.points) >= 2:
+            self.active = True
 
     def clear_selection(self, graph):
         if self.figure_id:
@@ -48,8 +50,8 @@ class SelectionTool:
         self.active = False
 
     def create_mask(self, image_size):
-        """Створює чорно-білу маску для PIL на основі виділення"""
-        if not self.has_selection(): return None
+        """Створює маску для вирізання"""
+        if not self.active or len(self.points) < 2: return None
         
         mask = Image.new('L', image_size, 0)
         draw = ImageDraw.Draw(mask)
