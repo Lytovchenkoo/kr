@@ -33,6 +33,7 @@ def get_display_image():
     return base
 
 def update_canvas():
+    """Повне оновлення екрану"""
     try:
         img = get_display_image()
         if img:
@@ -108,22 +109,24 @@ while True:
 
     mouse = values['-GRAPH-'] if values and '-GRAPH-' in values else (None, None)
 
-    # === ОБРОБКА КЛІКІВ ===
+    # === ОСНОВНА ОБРОБКА ПОДІЙ НА ПОЛОТНІ (Стара, перевірена логіка) ===
     if event == '-GRAPH-' and mouse != (None, None):
         x, y = mouse
         
-        # 1. ТЕКСТ (ДОДАНО!)
+        # --- ТЕКСТ ---
+        # Щоб уникнути циклу, ми скидаємо tool_mode відразу після відкриття вікна
         if tool_mode == 'TEXT' and layer_manager:
             layer = layer_manager.get_active_layer()
             if layer:
-                # Викликаємо вікно тексту
                 current_color = layer_manager.get_drawing_color()
-                added = text_tool.add_text(layer['image'], (x, y), current_color)
-                if added:
+                # Викликаємо інструмент
+                if text_tool.add_text(layer['image'], (x, y), current_color):
                     save_state()
                     update_canvas()
-        
-        # 2. ПІПЕТКА
+                # ВАЖЛИВО: Скидаємо режим, щоб вікно не відкривалось знову при русі миші
+                tool_mode = None 
+
+        # --- ПІПЕТКА ---
         elif tool_mode == 'EYEDROPPER' and layer_manager:
             comp_img = layer_manager.get_composite()
             color = eyedropper_tool.pick_color(comp_img, (x, y))
@@ -131,8 +134,11 @@ while True:
                 layer_manager.set_drawing_color(color)
                 hex_c = "#{:02x}{:02x}{:02x}".format(*color[:3])
                 window['ChooseColor'].update(button_color=(hex_c, hex_c))
+                # Також скидаємо режим, щоб не спамило повідомленнями
+                tool_mode = None
+                sg.popup_quick_message(f"Обрано колір: {hex_c}")
 
-        # 3. ПЕРЕМІЩЕННЯ
+        # --- ПЕРЕМІЩЕННЯ ---
         elif tool_mode == 'MoveTool' and floating_object:
             if not drag_start:
                 drag_start = mouse; obj_start = (floating_object['x'], floating_object['y'])
@@ -142,59 +148,81 @@ while True:
                 floating_object['y'] = obj_start[1] + dy
                 update_canvas()
 
-        # 4. МАЛЮВАННЯ
+        # --- МАЛЮВАННЯ (Оригінальна логіка) ---
         elif tool_mode in ['DRAW', 'ERASER'] and layer_manager:
             is_eraser = (tool_mode == 'ERASER')
+            
             if last_pos:
+                # Малюємо в пам'яті
                 layer_manager.draw_on_active_layer_line(last_pos, (x, y), erase=is_eraser)
+                
                 if is_eraser:
                     update_canvas()
                 else:
-                    c = layer_manager.get_drawing_color(); hex_c = "#{:02x}{:02x}{:02x}".format(*c[:3])
+                    # Швидке малювання на екрані (preview)
+                    c = layer_manager.get_drawing_color()
+                    hex_c = "#{:02x}{:02x}{:02x}".format(*c[:3])
                     r = layer_manager.brush_radius
                     window['-GRAPH-'].draw_line(last_pos, (x, y), color=hex_c, width=r*2)
                     window['-GRAPH-'].draw_circle((x, y), r, fill_color=hex_c, line_color=hex_c)
             else:
+                # Перша точка (клік)
                 layer_manager.draw_on_active_layer((x, y), erase=is_eraser)
                 if is_eraser: update_canvas()
+            
             last_pos = (x, y)
 
-        # 5. ВИДІЛЕННЯ
+        # --- ВИДІЛЕННЯ ---
         elif tool_mode in ['RECT', 'ELLIPSE', 'LASSO']:
             if not selection_tool.selecting: selection_tool.start_selection(mouse, tool_mode)
             else: selection_tool.update_selection(mouse, window['-GRAPH-'])
 
+    # === КОЛИ МИША ВІДПУЩЕНА АБО НЕ РУХАЄТЬСЯ ===
     elif event != '-GRAPH-':
-        last_pos = None
+        # Скидаємо малювання/переміщення
+        if last_pos:
+            last_pos = None
+            # Якщо малювали пензлем - фіксуємо результат на екрані
+            if tool_mode == 'DRAW': 
+                pass # Тут можна викликати update_canvas(), якщо малюнок зникає
+        
         drag_start = None
+        
+        # Завершуємо виділення
         if tool_mode in ['RECT', 'ELLIPSE', 'LASSO'] and selection_tool.selecting:
             selection_tool.finish_selection(window['-GRAPH-'])
 
-    # === ІНСТРУМЕНТИ ===
+    # === КНОПКИ ТА ІНСТРУМЕНТИ ===
     if event == "Почати малювання": 
         if floating_object: save_state()
         if layer_manager and layer_manager.active_index == 0:
-             layer_manager.add_layer(name="Малювання"); update_ui_layers()
-        tool_mode = 'DRAW'; last_pos = None
+             layer_manager.add_layer(name="Малювання")
+             update_ui_layers()
+        tool_mode = 'DRAW'
+        last_pos = None
 
     if event == "Завершити малювання":
-        tool_mode = None; last_pos = None; update_canvas(); save_state()
+        tool_mode = None
+        last_pos = None
+        update_canvas()
+        save_state()
 
     if event == "MoveTool": tool_mode = 'MoveTool'
     elif event == "EraserTool":
         if floating_object: save_state()
-        tool_mode = 'ERASER'
+        tool_mode = 'ERASER'; sg.popup_quick_message("Стирачка")
+    
     elif event == "Піпетка": 
-        tool_mode = 'EYEDROPPER'; eyedropper_tool.activate()
-        sg.popup_quick_message("Піпетка: оберіть колір")
+        tool_mode = 'EYEDROPPER'
+        eyedropper_tool.activate()
+        sg.popup_quick_message("Піпетка: Натисніть на колір")
 
     elif event == "Текст": 
         tool_mode = 'TEXT'
-        sg.popup_quick_message("Текст: клікніть де додати")
+        sg.popup_quick_message("Текст: Натисніть на місце вставки")
 
-    # Палітра
     if event == "ChooseColor" and layer_manager:
-        picked = sg.askcolor(title="Колір")
+        picked = sg.askcolor(title="Оберіть колір")
         if picked and picked[0]:
             rgba = picked[0] + (255,)
             layer_manager.set_drawing_color(rgba)
@@ -225,25 +253,33 @@ while True:
         if idxs: layer_manager.select_layer_by_gui_index(idxs[0]); update_ui_layers()
 
     if event == "Copy" and selection_tool.has_selection() and layer_manager:
-        l = layer_manager.get_active_layer(); mask = selection_tool.create_mask(l['image'].size); bbox = mask.getbbox()
-        if bbox: clipboard = l['image'].crop(bbox); clipboard.putalpha(mask.crop(bbox)); sg.popup_quick_message("Скопійовано")
+        l = layer_manager.get_active_layer()
+        if l:
+            mask = selection_tool.create_mask(l['image'].size)
+            bbox = mask.getbbox()
+            if bbox: clipboard = l['image'].crop(bbox); clipboard.putalpha(mask.crop(bbox)); sg.popup_quick_message("Скопійовано!")
 
     elif event == "Cut" and selection_tool.has_selection() and layer_manager:
-        l = layer_manager.get_active_layer(); mask = selection_tool.create_mask(l['image'].size); bbox = mask.getbbox()
-        if bbox:
-            clipboard = l['image'].crop(bbox); clipboard.putalpha(mask.crop(bbox))
-            empty = Image.new("RGBA", l['image'].size, (0,0,0,0))
-            l['image'] = Image.composite(empty, l['image'], mask)
-            selection_tool.clear_selection(window['-GRAPH-']); save_state(); update_canvas(); sg.popup_quick_message("Вирізано")
+        l = layer_manager.get_active_layer()
+        if l:
+            mask = selection_tool.create_mask(l['image'].size)
+            bbox = mask.getbbox()
+            if bbox:
+                clipboard = l['image'].crop(bbox); clipboard.putalpha(mask.crop(bbox))
+                empty = Image.new("RGBA", l['image'].size, (0,0,0,0))
+                l['image'] = Image.composite(empty, l['image'], mask)
+                selection_tool.clear_selection(window['-GRAPH-'])
+                save_state(); update_canvas(); sg.popup_quick_message("Вирізано!")
 
     elif event == "Paste" and clipboard and layer_manager:
         if floating_object: commit_floating_object()
         w, h = layer_manager.layers[0]['image'].size
         floating_object = {'image': clipboard.copy(), 'x': (w-clipboard.width)//2, 'y': (h-clipboard.height)//2}
-        tool_mode = 'MoveTool'; selection_tool.clear_selection(window['-GRAPH-']); update_canvas()
+        tool_mode = 'MoveTool'; selection_tool.clear_selection(window['-GRAPH-'])
+        update_canvas(); sg.popup_quick_message("Вставлено!")
 
     elif event == "AnchorObject":
-        if floating_object: save_state(); update_canvas()
+        if floating_object: save_state(); update_canvas(); sg.popup_quick_message("Зафіксовано")
 
     if event in ["SelectRect", "SelectEllipse", "SelectLasso"]:
         tool_mode = {'SelectRect':'RECT', 'SelectEllipse':'ELLIPSE', 'SelectLasso':'LASSO'}[event]; selection_tool.active = True
@@ -251,7 +287,8 @@ while True:
     elif event == "DeleteArea" and layer_manager:
         if floating_object: floating_object = None; update_canvas()
         elif selection_tool.has_selection():
-            l = layer_manager.get_active_layer(); mask = selection_tool.create_mask(l['image'].size)
+            l = layer_manager.get_active_layer()
+            mask = selection_tool.create_mask(l['image'].size)
             empty = Image.new("RGBA", l['image'].size, (0,0,0,0))
             l['image'] = Image.composite(empty, l['image'], mask)
             selection_tool.clear_selection(window['-GRAPH-']); save_state(); update_canvas()
@@ -267,7 +304,7 @@ while True:
         elif event == "Насиченість-": apply_layer_filter(adjust_saturation, factor=0.0)
         elif event == "АвтоРівні": apply_layer_filter(auto_levels)
         elif event == "БалансКольорів":
-            r = get_valid_float("R", 1.0); b = get_valid_float("B", 1.0)
+            r = get_valid_float("Червоний канал", 1.0); b = get_valid_float("Синій", 1.0)
             if r and b: apply_layer_filter(adjust_color_balance, r=r, g=1.0, b=b)
 
     if event == "Обернути" and layer_manager:
@@ -277,7 +314,8 @@ while True:
         if floating_object: floating_object['image'] = ImageOps.mirror(floating_object['image']); update_canvas()
         else: layer_manager.mirror_all(); save_state(); update_canvas()
     elif event == "Ресайз" and layer_manager:
-        t = layer_manager.layers[0]['image']; w = get_valid_int(f"Ширина ({t.width}):", t.width)
+        t = layer_manager.layers[0]['image']
+        w = get_valid_int(f"Ширина ({t.width}):", t.width)
         if w:
             ratio = w/t.width; h=int(t.height*ratio)
             layer_manager.resize_all(w, h, Image.Resampling.LANCZOS); save_state(); update_canvas()
